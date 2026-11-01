@@ -5,11 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>For You</title>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background-color: #030203;
       display: flex;
@@ -17,7 +13,7 @@
       align-items: center;
       min-height: 100vh;
       overflow: hidden;
-      background: #030203;
+      font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
     }
     canvas {
       display: block;
@@ -32,94 +28,171 @@
   <canvas id="canvas"></canvas>
 
   <script>
+    const SIZE = 8;
+    const FPS = 30;
+    const D2R = Math.PI / 180;
+
+    const T_ENV_IN = 1.6;
+    const T_CUR0 = 1.9;
+    const T_CUR1 = 4.1;
+    const T_CLICK = 4.55;
+    const T_BURN = T_CLICK + 0.12;
+    const T_SPREAD = 3.4;
+    const T_R0 = T_BURN + 2.3;
+    const T_FORM = 3.8;
+    const T_GLOW = T_R0 + 1.8;
+
+    class SeededRandom {
+      constructor(seed = 21) { this.state = seed; }
+      random() {
+        this.state = (this.state * 9301 + 49297) % 233280;
+        return this.state / 233280;
+      }
+      uniform(lo, hi) { return lo + this.random() * (hi - lo); }
+      randrange(n) { return Math.floor(this.random() * n); }
+      shuffle(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+          const j = Math.floor(this.random() * (i + 1));
+          [array[i], array[j]] = [array[j], array[i]];
+        }
+      }
+    }
+    const rng = new SeededRandom(21);
+
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
-    // Nastavení rozlišení mřížky (odpovídá Python verzi)
-    const COLS = 80;
+    const CW = SIZE * 0.62;
+    const CH = SIZE * 1.25;
     const ROWS = 40;
-    
-    // Automatické přizpůsobení velikosti okna
-    const CW = 12;
-    const CH = 18;
+    const COLS = Math.floor(ROWS * CH / CW);
     const W = COLS * CW;
     const H = ROWS * CH;
-    
+    const S = H / 640.0;
+
     canvas.width = W;
     canvas.height = H;
 
-    // Načtení fontu pro terminálový vzhled
-    ctx.font = "bold 14px 'Courier New', Courier, monospace";
-    ctx.textBaseline = "top";
+    const BG = [0.010, 0.007, 0.012];
 
-    let startTime = performance.now();
-    let clicked = false;
+    function clamp(v, lo = 0.0, hi = 1.0) { return v < lo ? lo : v > hi ? hi : v; }
+    function ease(t) { t = clamp(t); return t * t * (3 - 2 * t); }
+    function mix(a, b, k) { return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k]; }
+    function sc(c, k) { return [c[0] * k, c[1] * k, c[2] * k]; }
+    
+    function hexc(c) {
+      const r = Math.floor(clamp(c[0]) * 255);
+      const g = Math.floor(clamp(c[1]) * 255);
+      const b = Math.floor(clamp(c[2]) * 255);
+      return `rgb(${r},${g},${b})`;
+    }
 
-    // Kliknutím lze animaci restartovat nebo popohnat
-    window.addEventListener("click", () => {
-      clicked = true;
-      startTime = performance.now();
-    });
+    const _P = Array.from({ length: 256 }, (_, i) => i);
+    rng.shuffle(_P);
+    const _N = Array.from({ length: 256 }, () => rng.uniform(-1, 1));
 
-    function render(now) {
-      const t = (now - startTime) / 1000.0;
+    function vn(x, y) {
+      const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+      const xf = x - Math.floor(x), yf = y - Math.floor(y);
+      const x1 = (xi + 1) & 255, y1 = (yi + 1) & 255;
+      const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+      const a = _N[_P[(_P[xi] + yi) & 255]], b = _N[_P[(_P[x1] + yi) & 255]];
+      const c = _N[_P[(_P[xi] + y1) & 255]], d = _N[_P[(_P[x1] + y1) & 255]];
+      return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+    }
 
-      // Vyčištění plátna
-      ctx.fillStyle = "#030203";
-      ctx.fillRect(0, 0, W, H);
-
-      // Střed obrazovki
-      const CX = W / 2;
-      const CY = H / 2;
-
-      // Vykreslení ASCII efektu růže a obálky (zjednodušená webová simulace)
-      for (let r = 0; r < ROWS; r++) {
-        for (let c = 0; c < COLS; c++) {
-          const x = c * CW;
-          const y = r * CH;
-          
-          let char = "";
-          let color = "#110515";
-
-          const dx = x - CX;
-          const dy = y - CY;
-          const dist = Math.hypot(dx, dy);
-
-          // Generování efektu růže uprostřed ve správný čas
-          if (t > 2.0 && dist < 180 + Math.sin(t * 3 + r) * 15) {
-            const angle = Math.atan2(dy, dx);
-            const pattern = Math.sin(angle * 5 + t);
-            
-            if (dist < 60) {
-              char = pattern > 0 ? "@" : "#";
-              color = `rgb(255, ${Math.floor(50 + 100 * pattern)}, 80)`;
-            } else if (dist < 120) {
-              char = "%";
-              color = `rgb(${Math.floor(200 + 55 * pattern)}, 20, 60)`;
-            } else {
-              char = "~";
-              color = "rgb(30, 120, 40)"; // Lístky / stonek
-            }
-          } 
-          // Okolní hvězdičky / pozadí
-          else if ((r * 13 + c * 17) % 37 === 0) {
-            char = ".";
-            color = "#446699";
-          }
-
-          if (char) {
-            ctx.fillStyle = color;
-            ctx.fillText(char, x, y);
+    function ramp_lut(stops, n = 64) {
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const v = i / (n - 1);
+        for (let k = 0; k < stops.length - 1; k++) {
+          if (v <= stops[k + 1][0]) {
+            out.push(mix(stops[k][1], stops[k + 1][1], (v - stops[k][0]) / (stops[k + 1][0] - stops[k][0])));
+            break;
           }
         }
       }
+      return out;
+    }
 
-      // Vykreslení nápisu "FOR YOU" dole nebo uprostřed
-      if (t > 1.0) {
-        ctx.fillStyle = "#ffc0cb";
-        ctx.font = "bold 18px 'Courier New', monospace";
-        ctx.fillText("FOR YOU", CX - 40, CY + 140);
-        ctx.font = "bold 14px 'Courier New', Courier, monospace";
+    const FIRE = [[0.0, [0.3, 0.01, 0]], [0.18, [0.78, 0.05, 0.01]], [0.38, [1, 0.24, 0.02]], [0.6, [1, 0.52, 0.05]], [0.8, [1, 0.8, 0.26]], [1, [1, 0.98, 0.82]]];
+    const LUT = ramp_lut(FIRE);
+
+    const REDS = [[0.0, [0.1, 0, 0.02]], [0.22, [0.34, 0.01, 0.05]], [0.45, [0.66, 0.04, 0.09]], [0.68, [0.9, 0.09, 0.15]], [0.88, [1, 0.24, 0.26]], [1, [1, 0.55, 0.52]]];
+    const RLUT = ramp_lut(REDS);
+    const RCH = "-=+*#%&@8";
+
+    const BLUES = [[0.0, [0.01, 0.03, 0.16]], [0.25, [0.03, 0.14, 0.52]], [0.5, [0.1, 0.38, 0.95]], [0.75, [0.5, 0.78, 1]], [1, [1, 1, 1]]];
+    const BLUE = ramp_lut(BLUES);
+
+    const CX = W / 2.0;
+    const EW = 0.76 * W;
+    const EH = 0.74 * EW;
+    const ECY = 0.55 * H;
+    const EX0 = CX - EW / 2, EX1 = CX + EW / 2;
+    const EY0 = ECY - EH / 2, EY1 = ECY + EH / 2;
+    const FLAP_H = 0.50 * EH;
+    const TIPY = EY0 + FLAP_H;
+    const HR = 0.062 * H;
+    const HCY = TIPY - 0.25 * HR;
+
+    let startTime = performance.now();
+    window.addEventListener("click", () => {
+      startTime = performance.now(); // Restart animace při kliknutí
+    });
+
+    function render(timestamp) {
+      const t = (timestamp - startTime) / 1000.0;
+
+      ctx.fillStyle = hexc(BG);
+      ctx.fillRect(0, 0, W, H);
+      ctx.font = `bold ${SIZE}px "Cascadia Mono", monospace`;
+      ctx.textBaseline = "top";
+
+      const gt = ease((t - T_GLOW) / 3.6);
+
+      for (let r = 0; r < ROWS; r++) {
+        const y = (r + 0.5) * CH;
+        for (let c = 0; c < COLS; c++) {
+          const x = (c + 0.5) * CW;
+          
+          let char = "";
+          let col = [0.8, 0.6, 0.4];
+
+          // Základní obálka a srdce
+          const hx_ = (x - CX) / HR;
+          const hy_ = (HCY - y) / HR;
+          const inHeart = (-1.4 < hx_ && hx_ < 1.4 && -1.3 < hy_ && hy_ < 1.6 && Math.pow(hx_*hx_ + (hy_-0.25)*(hy_-0.25)-1, 3) - hx_*hx_*Math.pow(hy_-0.25, 3) <= 0);
+
+          if (t < T_BURN) {
+            if (x >= EX0 && x <= EX1 && y >= EY0 && y <= EY1) {
+              if (inHeart) {
+                char = "@";
+                col = [0.86, 0.4, 0.58];
+              } else {
+                char = "#";
+                col = [0.73, 0.55, 0.34];
+              }
+            }
+          } else {
+            // Efekt rozkvětu růže po shoření obálky
+            const dx = x - CX;
+            const dy = y - (H * 0.4);
+            const dist = Math.hypot(dx, dy);
+            if (t > T_R0 && dist < 120) {
+              char = RCH[Math.floor((Math.sin(dist * 0.1 - t) + 1) * 4)];
+              col = [1.0, 0.2, 0.3];
+            } else if (gt > 0.01) {
+              char = ".";
+              col = [0.2, 0.5, 0.9];
+            }
+          }
+
+          if (char) {
+            ctx.fillStyle = hexc(col);
+            ctx.fillText(char, c * CW, r * CH);
+          }
+        }
       }
 
       requestAnimationFrame(render);
